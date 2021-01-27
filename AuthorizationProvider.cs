@@ -13,6 +13,7 @@ using IdentityModel;
 using IdentityModel.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Waffenschmidt.AuthZ.Resolver.Models;
 
 namespace Authorization
 {
@@ -53,7 +54,7 @@ namespace Authorization
             var key = principal.FindFirstValue(JwtClaimTypes.Subject) ??
                       principal.FindFirstValue(JwtClaimTypes.ClientId);
             var address = _options.Value.Address.TrimEnd('/') +
-                          $"/Authorization/Resolve/{(isSubject ? "User" : "Client")}/{key}";
+                          $"{_options.Value.ResolvePath}/{(isSubject ? "User" : "Client")}/{key}";
 
             if (!_options.Value.Cache.Enabled)
             {
@@ -61,12 +62,15 @@ namespace Authorization
                 {
                     Address = address
                 }, cancellationToken);
+
+                await _options.Value.Events.AuthorizationsInvoked(new AuthorizationsInvokedContext() { ClaimsIdentity = identity });
                 return identity;
             }
 
             var cachedClaimsIdentity = await _authorizationCache.GetAsync(key);
             if (cachedClaimsIdentity != null)
             {
+                await _options.Value.Events.AuthorizationsInvoked(new AuthorizationsInvokedContext() { ClaimsIdentity = cachedClaimsIdentity });
                 return cachedClaimsIdentity;
             }
 
@@ -80,13 +84,15 @@ namespace Authorization
                     TimeSpan.FromSeconds(GetExpirationTime(authz.ExpiresIn)));
             }
 
+            await _options.Value.Events.AuthorizationsInvoked(new AuthorizationsInvokedContext() { ClaimsIdentity = claimsIdentity });
             return claimsIdentity;
         }
 
         private async Task<(ClaimsIdentity, PrincipalAuthorizations)> ProceedAuthorizationInvokeAsync(ClaimsPrincipal principal,
             PrincipalAuthorizationsRequest request, CancellationToken cancellationToken = default)
         {
-           var authorizationResponse = await _client.RequestAuthorizationsAsync(request, cancellationToken);
+            await _options.Value.Events.InvokeAuthorizations(new InvokeAuthorizationsContext() { Request = request });
+            var authorizationResponse = await _client.RequestAuthorizationsAsync(request, cancellationToken);
             if (!authorizationResponse.IsError)
             {
                 var authorizations = new PrincipalAuthorizations()
